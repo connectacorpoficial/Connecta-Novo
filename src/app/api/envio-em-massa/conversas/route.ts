@@ -69,11 +69,25 @@ export async function PATCH(request: Request) {
     const user = await requireCurrentUser();
     const body = z.object({
       conversationId: z.string().uuid(),
-      action: z.enum(["assign", "block", "unblock"]).default("assign"),
+      action: z.enum(["assign", "block", "unblock", "mark-read"]).default("assign"),
       ownerUserId: z.string().uuid().nullable().optional(),
     }).safeParse(await request.json());
     if (!body.success) return NextResponse.json(errorResponse("Dados inválidos."), { status: 400 });
     const { conversationId, action } = body.data;
+
+    if (action === "mark-read") {
+      const conversation = await prisma.chatConversation.findFirst({
+        where: { ...dispatchConversationScope(user), id: conversationId },
+        select: { id: true },
+      });
+      if (!conversation) return NextResponse.json(errorResponse("Conversa não encontrada."), { status: 404 });
+      const updated = await prisma.chatMessage.updateMany({
+        where: { conversationId, direction: "inbound", readAt: null },
+        data: { readAt: new Date() },
+      });
+      if (updated.count) await publishConversationEvent({ conversationId, type: "conversation_updated" });
+      return NextResponse.json(successResponse("Conversa marcada como lida.", null));
+    }
 
     if (action === "block" || action === "unblock") {
       const count = (await prisma.chatConversation.updateMany({
